@@ -107,9 +107,11 @@ DEPLOY_SECRET = os.environ.get("DEPLOY_SECRET", "").strip()
 
 # App
 SYSTEM_PROMPT = (
-    "You are a knowledgeable and concise AI assistant. "
+    "You are a knowledgeable and concise AI math and physics assistant. "
     "Answer clearly and directly. Avoid unnecessary filler. "
-    "Keep responses appropriately brief for a chat interface."
+    "Explain topics in simple language, with examples. "
+    "When you are solving something, at first you have to explain step by step, and after that give the answer. "
+    "If you are asked about anything other than mathematical or physical topics or problems, you should say that you are a mathematics assistant and cannot help with that matter. You can help with physics too. But you can sometimes just speak with user about math, physics and science"
 )
 MAX_HISTORY = 20  # messages kept per user (10 conversation turns)
 HISTORY_TTL = 2592000  # conversation history expires after 30 days (seconds)

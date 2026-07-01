@@ -1,8 +1,11 @@
+import json
 import os
+import random
 from datetime import datetime
 from bot.clients import bot, BOT_INFO, store
-from bot.config import COMMIT_SHA, HF_SPACE_ID, HOSTING_LABEL, MODEL, RATE_LIMIT
+from bot.config import HF_SPACE_ID, RATE_LIMIT, SYSTEM_PROMPT
 from bot.ai import ask_ai
+from bot.providers import generate
 from bot.helpers import is_allowed, keep_typing, send_reply, should_respond
 from bot.history import clear_history
 from bot.preferences import get_provider, set_provider
@@ -49,7 +52,7 @@ def _log(message, direction: str, text: str) -> None:
 def cmd_start(message):
     bot.send_message(
         message.chat.id,
-        "Hello! I'm your AI assistant. Send me a message to get started.\n\nUse /help to see available commands.",
+        "Hello! I'm your AI Math and Pyhsics assistant. Send me a message to get started. I can help you with math problems.\n\nUse /help to see available commands.\n\n Are you ready?",
     )
 
 
@@ -60,6 +63,15 @@ def cmd_help(message):
         "/help  — show this message",
         "/reset — clear conversation history",
         "/about — about this bot",
+        "/joke — tells you a funny joke about math",
+        "/quote — tells you a motivational quote about math",
+        "/fact — tells you an interesting fact about math",
+        "/compliment — tells you a kind compliment",
+        "/roast — tells you a playful roast about math with name you write"
+        "/roll — rolls a dice",
+        "/remember — remembers what you write"
+        "/recall — shows you, what he has remembered"
+        "/forget — forgets all notes"
     ]
     if HF_SPACE_ID:
         lines.append("/model — switch AI provider")
@@ -74,20 +86,144 @@ def cmd_reset(message):
 
 @bot.message_handler(commands=["about"], func=is_allowed)
 def cmd_about(message):
-    if HF_SPACE_ID:
-        provider = get_provider(message.from_user.id)
-        model_line = f"{MODEL} (main)" if provider == "main" else f"{HF_SPACE_ID} (hf)"
-    else:
-        model_line = MODEL
-    storage_line = "SQLite" if store is not None else "stateless (no memory)"
-    lines = [
-        f"Model  : {model_line}",
-        f"Storage: {storage_line}",
-        f"Hosting: {HOSTING_LABEL}",
+    # Ask the AI to introduce itself, using the configured persona. We call
+    # generate() directly (not ask_ai) so this one-off prompt is NOT saved
+    # into the user's conversation history. Falls back to a static message if
+    # the provider is unavailable so /about never crashes.
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": "Briefly introduce yourself and what you can help with."},
     ]
-    if COMMIT_SHA:
-        lines.append(f"Version: {COMMIT_SHA}")
-    bot.send_message(message.chat.id, "\n".join(lines))
+    try:
+        about_text = generate(message.from_user.id, messages)
+    except Exception:
+        about_text = (
+            "I'm your AI math assistant. Send me a math problem "
+            "and I'll explain it step by step."
+        )
+    bot.send_message(message.chat.id, about_text)
+
+def _one_off(message, system_prompt: str, user_prompt: str) -> None:
+    """Send a single AI reply using a per-command system prompt.
+
+    Uses generate() directly instead of ask_ai() so the math-only
+    SYSTEM_PROMPT is NOT applied (these fun commands would otherwise be
+    refused as off-topic) and the exchange is not saved into the user's
+    conversation history. Falls back to a static message if the provider
+    is unavailable so the command never crashes silently.
+    """
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    try:
+        reply = generate(message.from_user.id, messages)
+    except Exception as e:
+        print(f"Error in one-off command: {e}")
+        reply = "Sorry, I couldn't come up with something right now. Try again!"
+    bot.send_message(message.chat.id, reply)
+
+
+@bot.message_handler(commands=["joke"], func=is_allowed)
+def cmd_joke(message):
+    _one_off(
+        message,
+        "You are a witty assistant. Reply with exactly one short, family-friendly joke.",
+        "Tell me a funny joke about maths or physics.",
+    )
+
+@bot.message_handler(commands=["quote"], func=is_allowed)
+def cmd_quote(message):
+    _one_off(
+        message,
+        "You are an inspiring assistant. Reply with one short motivational quote.",
+        "Give me a motivational quote about maths or physics.",
+    )
+
+@bot.message_handler(commands=["fact"], func=is_allowed)
+def cmd_fact(message):
+    _one_off(
+        message,
+        "You are a knowledgeable assistant. Reply with one short, interesting fact.",
+        "Tell me an interesting fact about maths or physics.",
+    )
+
+@bot.message_handler(commands=["compliment"], func=is_allowed)
+def cmd_compliment(message):
+    _one_off(
+        message,
+        "You are a kind, encouraging assistant. Reply with one warm, genuine compliment.",
+        "Write a kind compliment for me.",
+    )
+
+@bot.message_handler(commands=["roll"], func=is_allowed)
+def cmd_roll(message):
+    rollNumber = random.randint(1, 6)
+    bot.send_message(message.chat.id, f"You rolled a {rollNumber}!")
+
+@bot.message_handler(commands=["roast"], func=is_allowed)
+def cmd_roast(message):
+    name = message.text.split(maxsplit=1)[1] if " " in message.text else "you"
+    _one_off(
+        message,
+        "You are a playful assistant. Reply with one short, light, friendly roast — never mean.",
+        f"Write a short, playful, friendly roast of {name} about math or physics.",
+    )
+
+@bot.message_handler(commands=["remember"], func=is_allowed)
+def cmd_remember(message):
+    if store is None:
+        bot.send_message(message.chat.id, "Memory isn't available right now.")
+        return
+    note = message.text.split(maxsplit=1)[1].strip() if " " in message.text else ""
+    if not note:
+        bot.send_message(message.chat.id, "Usage: /remember <something to remember>")
+        return
+    key = f"notes:{message.from_user.id}"
+    try:
+        data = store.get(key)
+        notes = json.loads(data) if data else []
+        notes.append(note)
+        store.set(key, json.dumps(notes))
+    except Exception as e:
+        print(f"Store error (remember): {e}")
+        bot.send_message(message.chat.id, "Couldn't save that. Try again later.")
+        return
+    bot.send_message(message.chat.id, f"Saved! You now have {len(notes)} note(s).")
+
+@bot.message_handler(commands=["recall"], func=is_allowed)
+def cmd_recall(message):
+    if store is None:
+        bot.send_message(message.chat.id, "Memory isn't available right now.")
+        return
+    try:
+        data = store.get(f"notes:{message.from_user.id}")
+        notes = json.loads(data) if data else []
+    except Exception as e:
+        print(f"Store error (recall): {e}")
+        bot.send_message(message.chat.id, "Couldn't read your notes. Try again later.")
+        return
+    if not notes:
+        bot.send_message(
+            message.chat.id,
+            "I don't have anything saved for you yet. Use /remember <text> first.",
+        )
+        return
+    lines = [f"{i}. {note}" for i, note in enumerate(notes, 1)]
+    bot.send_message(message.chat.id, "Here's what you asked me to remember:\n" + "\n".join(lines))
+
+@bot.message_handler(commands=["forget"], func=is_allowed)
+def cmd_forget(message):
+    if store is None:
+        bot.send_message(message.chat.id, "Memory isn't available right now.")
+        return
+    try:
+        store.delete(f"notes:{message.from_user.id}")
+    except Exception as e:
+        print(f"Store error (forget): {e}")
+        bot.send_message(message.chat.id, "Couldn't clear your notes. Try again later.")
+        return
+    bot.send_message(message.chat.id, "Done — I've forgotten all your notes.")
 
 
 if HF_SPACE_ID:
