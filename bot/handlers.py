@@ -67,7 +67,7 @@ def cmd_help(message):
         "/quote — tells you a motivational quote about math or physics",
         "/fact — tells you an interesting fact about math or physics",
         "/compliment — tells you a kind compliment",
-        "/roast <name/nothing> — tells you a playful roast about math and physics with name you write",
+        "/roast <name/nothing> — tells you a playful roast about math or physics with name you write",
         "/roll — rolls a dice",
         "/remember <text> — remembers what you write",
         "/recall — shows you, what he has remembered",
