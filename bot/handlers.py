@@ -63,15 +63,16 @@ def cmd_help(message):
         "/help  — show this message",
         "/reset — clear conversation history",
         "/about — about this bot",
-        "/joke — tells you a funny joke about math",
-        "/quote — tells you a motivational quote about math",
-        "/fact — tells you an interesting fact about math",
+        "/joke — tells you a funny joke about math or physics",
+        "/quote — tells you a motivational quote about math or physics",
+        "/fact — tells you an interesting fact about math or physics",
         "/compliment — tells you a kind compliment",
-        "/roast — tells you a playful roast about math with name you write"
+        "/roast <name/nothing> — tells you a playful roast about math or physics with name you write",
         "/roll — rolls a dice",
-        "/remember — remembers what you write"
-        "/recall — shows you, what he has remembered"
-        "/forget — forgets all notes"
+        "/remember <text> — remembers what you write",
+        "/recall — shows you, what he has remembered",
+        "/forget — forgets all notes",
+        "/problem <math/physics> — gives you a math or physics problem"
     ]
     if HF_SPACE_ID:
         lines.append("/model — switch AI provider")
@@ -169,6 +170,17 @@ def cmd_roast(message):
         "You are a playful assistant. Reply with one short, light, friendly roast — never mean.",
         f"Write a short, playful, friendly roast of {name} about math or physics.",
     )
+
+@bot.message_handler(commands=["problem"], func=is_allowed)
+def cmd_problem(message):
+    try:
+        type_of_problem = message.text.split(maxsplit=1)[1]
+    except IndexError:
+        bot.send_message(message.chat.id, "Please write what kind of problem do you want (math/physics)")
+        return
+
+    problem = ask_ai(message.chat.id, f"Give me a {type_of_problem} problem.")
+    bot.send_message(message.chat.id, problem)
 
 @bot.message_handler(commands=["remember"], func=is_allowed)
 def cmd_remember(message):

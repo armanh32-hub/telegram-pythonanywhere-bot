@@ -106,7 +106,14 @@ $PaApi               = "https://www.pythonanywhere.com/api/v0/user/$PaUsername"
 $Domain              = "$PaUsername.pythonanywhere.com"
 $ProjectDir          = "/home/$PaUsername/$RepoName"
 $VenvDir             = "/home/$PaUsername/.virtualenvs/telegram-bot"
-$WsgiFile            = "/var/www/${PaUsername}_pythonanywhere_com_wsgi.py"
+# PA serves from the LOWERCASE domain and loads the WSGI file named after it,
+# even when the account (and its /home dir) is capitalised. Linux paths are
+# case-sensitive, so a mixed-case WSGI filename here is silently ignored — PA
+# keeps loading its own lowercase-named default and serves the "Hello World"
+# placeholder forever. Derive the filename from the lowercased domain. This is
+# a no-op for the normal all-lowercase account. NOTE: /home paths above must
+# keep $PaUsername's real case (that IS the actual home directory).
+$WsgiFile            = "/var/www/$(($Domain.ToLower()) -replace '\.', '_')_wsgi.py"
 $WebhookUrlResolved  = "https://$Domain/api/webhook"
 $PythonVersion       = 'python313'
 
@@ -134,13 +141,33 @@ function Invoke-Pa {
     if (-not $NoAuth) { $headers['Authorization'] = "Token $PaToken" }
     $p = @{
         Uri = $uri; Method = $Method; Headers = $headers; TimeoutSec = $TimeoutSec
-        SkipHttpErrorCheck = $true; StatusCodeVariable = 'code'
+        SkipHttpErrorCheck = $true
     }
-    if ($Form)              { $p.Form = $Body }
-    elseif ($null -ne $Body) { $p.Body = $Body }
+    if ($Form) {
+        $p.Form = $Body
+    } elseif ($null -ne $Body) {
+        # Send hashtable bodies as application/x-www-form-urlencoded, exactly like
+        # the bash script's `curl --data-urlencode`. We URL-encode + set the
+        # Content-Type ourselves rather than letting IWR infer it from the
+        # hashtable: on PS7 that inference omits the Content-Type header on PATCH,
+        # so PA rejects the config call with HTTP 415 ("Unsupported media type").
+        if ($Body -is [System.Collections.IDictionary]) {
+            $pairs = foreach ($k in $Body.Keys) {
+                '{0}={1}' -f [uri]::EscapeDataString([string]$k), [uri]::EscapeDataString([string]$Body[$k])
+            }
+            $p.Body = ($pairs -join '&')
+            $p.ContentType = 'application/x-www-form-urlencoded'
+        } else {
+            $p.Body = $Body
+        }
+    }
     try {
+        # -SkipHttpErrorCheck keeps 4xx/5xx from throwing, so the response object
+        # is returned either way and .StatusCode carries the code. (Do NOT use
+        # -StatusCodeVariable — it is not a real Invoke-WebRequest parameter and
+        # its mere presence in the splat makes every call throw.)
         $resp = Invoke-WebRequest @p
-        return [pscustomobject]@{ Code = [int]$code; Body = [string]$resp.Content }
+        return [pscustomobject]@{ Code = [int]$resp.StatusCode; Body = [string]$resp.Content }
     } catch {
         # Network-level failure (DNS, TLS, timeout) — no HTTP status.
         return [pscustomobject]@{ Code = 0; Body = [string]$_.Exception.Message }
@@ -344,6 +371,24 @@ if ($health -eq 200) {
     Write-Ok "OK (200) — bot is live."
 } else {
     Write-Err "/api/health returned $health after reload."
+    # A brand-new web app created via the API stays dormant until it is
+    # activated once from the browser Web tab: PA's front-end serves a default
+    # placeholder page and never spawns a worker, so /reload/ returns 200 but is
+    # a no-op and NO log files exist yet. Detect that (no server.log) and print
+    # the one-time manual step instead of a misleading "error log not found".
+    $serverLogExists = (Invoke-Pa -Path "/files/path/var/log/$Domain.server.log").Code -eq 200
+    if (-not $serverLogExists) {
+        Write-Host ""
+        Write-Warn "!!! ONE-TIME MANUAL STEP (new web app) !!!"
+        Write-Host "    This web app has never been activated — PythonAnywhere's free tier"
+        Write-Host "    won't spawn a worker for a brand-new app until you reload it once"
+        Write-Host "    from the browser. Open the Web tab and click the green 'Reload' button:"
+        Write-Host "    https://www.pythonanywhere.com/user/$PaUsername/webapps/#tab_id_${PaUsername}_pythonanywhere_com"
+        Write-Host ""
+        Write-Host "    Then re-run this script (or just hit https://$Domain/api/health)"
+        Write-Host "    to confirm the bot is live. Everything else is already configured."
+        exit 1
+    }
     Write-Info "Fetching PA error log to diagnose..."
     $log = (Invoke-Pa -Path "/files/path/var/log/$Domain.error.log").Body
     if ($log) {
