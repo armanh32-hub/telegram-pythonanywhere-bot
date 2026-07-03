@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import random
@@ -75,6 +76,7 @@ def cmd_help(message):
         "/problem <math/physics> <low/middle/high> — gives you a math or physics problem with difficulty you wrote",
         "/convert <in unit> <out unit> — converts units of measurement (for example /convert 60km/h m/s)",
         "/constants — shows you math and physics constants",
+        "/plot <function of x> — plots a function, e.g. /plot sin(x) + x/2",
     ]
     if HF_SPACE_ID:
         lines.append("/model — switch AI provider")
@@ -320,6 +322,121 @@ def cmd_constants(message):
     for symbol, value, description in PhysicsConstants.CONSTANTS:
         lines_of_constants.append(f"{symbol} = {value} — {description}")
     send_reply(message, "\n".join(lines_of_constants))
+
+
+# Names the /plot expression is allowed to reference. Anything else (an
+# unknown function, or an attribute-access exploit like __class__) is
+# rejected before eval() ever runs — this is the security boundary.
+_PLOT_ALLOWED_NAMES = {
+    "x", "pi", "e", "tau",
+    "sin", "cos", "tan", "asin", "acos", "atan",
+    "sinh", "cosh", "tanh", "exp", "sqrt", "abs",
+    "log", "ln", "log10", "log2", "ceil", "floor", "sign",
+}
+
+
+def _render_plot(expr: str, x_min: float = -10.0, x_max: float = 10.0, points: int = 1000):
+    """Render y = f(x) over [x_min, x_max] to a PNG in memory.
+
+    matplotlib/numpy are imported lazily (inside this function, not at
+    module top) so that (a) worker boot stays fast and light and (b)
+    importing this module for the test suite doesn't require them.
+
+    The expression is evaluated with eval() but sandboxed two ways: the
+    builtins are stripped, and every alphabetic token must be a known
+    math name (see _PLOT_ALLOWED_NAMES). Raises ValueError with a
+    user-friendly message on any bad input.
+    """
+    import re
+
+    import numpy as np
+    import matplotlib
+    matplotlib.use("Agg")  # headless backend — no display on the server
+    import matplotlib.pyplot as plt
+
+    code = expr.replace("^", "**")  # let students write x^2 for x**2
+    if "__" in code:
+        raise ValueError("that expression isn't allowed.")
+    unknown = sorted({n for n in re.findall(r"[A-Za-z_]+", code) if n not in _PLOT_ALLOWED_NAMES})
+    if unknown:
+        raise ValueError(
+            f"unknown name(s): {', '.join(unknown)}. "
+            "Use x and functions like sin, cos, exp, sqrt, log."
+        )
+
+    x = np.linspace(x_min, x_max, points)
+    namespace = {
+        "x": x, "pi": np.pi, "e": np.e, "tau": 2 * np.pi,
+        "sin": np.sin, "cos": np.cos, "tan": np.tan,
+        "asin": np.arcsin, "acos": np.arccos, "atan": np.arctan,
+        "sinh": np.sinh, "cosh": np.cosh, "tanh": np.tanh,
+        "exp": np.exp, "sqrt": np.sqrt, "abs": np.abs,
+        "log": np.log, "ln": np.log, "log10": np.log10, "log2": np.log2,
+        "ceil": np.ceil, "floor": np.floor, "sign": np.sign,
+    }
+    try:
+        with np.errstate(all="ignore"):  # divide-by-zero / domain errors -> nan, no warning spam
+            y = eval(code, {"__builtins__": {}}, namespace)
+    except Exception:
+        raise ValueError("couldn't understand that function. Example: /plot x**2 - 3*x + 2")
+
+    y = np.asarray(y, dtype=float)
+    y = np.full_like(x, float(y)) if y.ndim == 0 else np.broadcast_to(y, x.shape).astype(float)
+
+    # Break the curve across asymptotes (e.g. tan(x), 1/x) so matplotlib
+    # doesn't draw near-vertical lines connecting +inf to -inf.
+    diffs = np.abs(np.diff(y))
+    finite_diffs = diffs[np.isfinite(diffs)]
+    if finite_diffs.size:
+        jump = max(np.percentile(finite_diffs, 99) * 10, 1e-9)
+        y[:-1][diffs > jump] = np.nan
+
+    finite = y[np.isfinite(y)]
+    if finite.size == 0:
+        raise ValueError(f"the function has no real values on [{x_min:g}, {x_max:g}].")
+
+    fig, ax = plt.subplots(figsize=(8, 5), dpi=110)
+    ax.plot(x, y, color="#1f77b4", linewidth=2)
+    ax.axhline(0, color="gray", linewidth=0.8)
+    ax.axvline(0, color="gray", linewidth=0.8)
+    ax.grid(True, alpha=0.3)
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_title(f"y = {expr}")
+
+    # Clip the y-axis to the bulk of the data so a single spike doesn't
+    # flatten the interesting part of the curve.
+    lo, hi = np.percentile(finite, [2, 98])
+    if hi > lo:
+        pad = (hi - lo) * 0.15
+        ax.set_ylim(lo - pad, hi + pad)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)  # release the figure so repeated calls don't leak memory
+    buf.seek(0)
+    return buf
+
+
+@bot.message_handler(commands=["plot"], func=is_allowed)
+def cmd_plot(message):
+    expr = message.text.split(maxsplit=1)[1].strip() if " " in message.text else ""
+    if not expr:
+        bot.send_message(
+            message.chat.id,
+            "Usage: /plot <function of x>\nExample: /plot sin(x) + x/2",
+        )
+        return
+    try:
+        image = _render_plot(expr)
+    except ValueError as e:
+        bot.send_message(message.chat.id, f"Couldn't plot that: {e}")
+        return
+    except Exception as e:
+        print(f"Plot error: {e}")
+        bot.send_message(message.chat.id, "Sorry, I couldn't plot that function.")
+        return
+    bot.send_photo(message.chat.id, image, caption=f"y = {expr}   (x from -10 to 10)")
 
 
 if HF_SPACE_ID:
