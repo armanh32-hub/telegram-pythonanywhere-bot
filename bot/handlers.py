@@ -236,7 +236,7 @@ def cmd_problem(message):
         return
     type_of_problem, difficulty = parts[1], parts[2]
 
-    problem = ask_ai(message.chat.id, f"Give me a {type_of_problem} problem with {difficulty} difficulty.")
+    problem = ask_ai(message.chat.id, f"Give me a {type_of_problem} problem with {difficulty} difficulty. Dont give any hints and dont give the solution and answer.")
     bot.send_message(message.chat.id, problem)
 
 @bot.message_handler(commands=["convert"], func=is_allowed)
