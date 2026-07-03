@@ -72,8 +72,9 @@ def cmd_help(message):
         "/remember <text> — remembers what you write",
         "/recall — shows you, what he has remembered",
         "/forget — forgets all notes",
-        "/problem <math/physics> — gives you a math or physics problem",
-        "/sha   — show the live git commit SHA",
+        "/problem <math/physics> <low/middle/high> — gives you a math or physics problem with difficulty you wrote",
+        "/convert <in unit> <out unit> — converts units of measurement (for example /convert 60km/h m/s)",
+        "/constants — shows you math and physics constants",
     ]
     if HF_SPACE_ID:
         lines.append("/model — switch AI provider")
@@ -172,17 +173,6 @@ def cmd_roast(message):
         f"Write a short, playful, friendly roast of {name} about math or physics.",
     )
 
-@bot.message_handler(commands=["problem"], func=is_allowed)
-def cmd_problem(message):
-    parts = message.text.split(maxsplit=2)
-    if len(parts) < 3:
-        bot.send_message(message.chat.id, "Please specify the type of problem (math/physics) you would like and its difficulty level.")
-        return
-    type_of_problem, difficulty = parts[1], parts[2]
-
-    problem = ask_ai(message.chat.id, f"Give me a {type_of_problem} problem with {difficulty} difficulty.")
-    bot.send_message(message.chat.id, problem)
-
 @bot.message_handler(commands=["remember"], func=is_allowed)
 def cmd_remember(message):
     if store is None:
@@ -238,11 +228,98 @@ def cmd_forget(message):
         return
     bot.send_message(message.chat.id, "Done — I've forgotten all your notes.")
 
+@bot.message_handler(commands=["problem"], func=is_allowed)
+def cmd_problem(message):
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
+        bot.send_message(message.chat.id, "Please specify the type of problem (math/physics) you would like and its difficulty level.")
+        return
+    type_of_problem, difficulty = parts[1], parts[2]
 
-@bot.message_handler(commands=["sha"], func=is_allowed)
-def cmd_sha(message):
-    sha = COMMIT_SHA or "unknown"
-    bot.send_message(message.chat.id, f"Live SHA: {sha}")
+    problem = ask_ai(message.chat.id, f"Give me a {type_of_problem} problem with {difficulty} difficulty.")
+    bot.send_message(message.chat.id, problem)
+
+@bot.message_handler(commands=["convert"], func=is_allowed)
+def cmd_convert(message):
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
+        bot.send_message(message.chat.id, "You must write down both the initial and final units of measurement.")
+    input_unit = parts[1]
+    output_unit = parts[2]
+
+    reply = ask_ai(message.chat.id, f"Convert {input_unit} to {output_unit}" )
+
+class MathConstants:
+    """Common mathematical constants (all dimensionless).
+
+    Each entry is (symbol, value, short description) so the /constants
+    command can print exactly one constant per line.
+    """
+
+    CONSTANTS = [
+        ("π (pi)", "3.14159265358979", "circle circumference ÷ diameter"),
+        ("τ (tau)", "6.28318530717959", "one full turn in radians (2π)"),
+        ("e (Euler's number)", "2.71828182845905", "base of the natural logarithm"),
+        ("φ (golden ratio)", "1.61803398874989", "(1 + √5) ÷ 2"),
+        ("√2 (Pythagoras' constant)", "1.41421356237310", "diagonal of a unit square"),
+        ("√3 (Theodorus' constant)", "1.73205080756888", "square root of 3"),
+        ("√5", "2.23606797749979", "square root of 5"),
+        ("γ (Euler–Mascheroni)", "0.57721566490153", "limit of (harmonic sum − ln n)"),
+        ("ln 2", "0.69314718055995", "natural logarithm of 2"),
+        ("ln 10", "2.30258509299405", "natural logarithm of 10"),
+        ("log₁₀ e", "0.43429448190325", "base-10 logarithm of e"),
+        ("ζ(3) (Apéry's constant)", "1.20205690315959", "sum of 1/n³ over n ≥ 1"),
+        ("K (Catalan's constant)", "0.91596559417722", "sum of (−1)ⁿ/(2n+1)²"),
+        ("δ (Feigenbaum δ)", "4.66920160910299", "period-doubling bifurcation ratio"),
+        ("α (Feigenbaum α)", "2.50290787509589", "period-doubling width ratio"),
+        ("Ω (omega constant)", "0.56714329040978", "solution of Ω·e^Ω = 1"),
+    ]
+
+
+class PhysicsConstants:
+    """Fundamental physical constants in SI units (CODATA values).
+
+    Each entry is (symbol, value with unit, short description) so the
+    /constants command can print exactly one constant per line.
+    """
+
+    CONSTANTS = [
+        ("c (speed of light)", "299792458 m/s", "speed of light in vacuum"),
+        ("G (gravitational constant)", "6.67430×10⁻¹¹ m³·kg⁻¹·s⁻²", "Newton's constant of gravitation"),
+        ("h (Planck constant)", "6.62607015×10⁻³⁴ J·s", "quantum of action"),
+        ("ħ (reduced Planck constant)", "1.054571817×10⁻³⁴ J·s", "h ÷ 2π"),
+        ("e (elementary charge)", "1.602176634×10⁻¹⁹ C", "charge of a proton"),
+        ("k (Boltzmann constant)", "1.380649×10⁻²³ J/K", "energy per kelvin per particle"),
+        ("Nₐ (Avogadro constant)", "6.02214076×10²³ mol⁻¹", "particles per mole"),
+        ("R (molar gas constant)", "8.314462618 J·mol⁻¹·K⁻¹", "Nₐ × k"),
+        ("σ (Stefan–Boltzmann constant)", "5.670374419×10⁻⁸ W·m⁻²·K⁻⁴", "black-body radiated power"),
+        ("ε₀ (vacuum permittivity)", "8.8541878128×10⁻¹² F/m", "electric constant"),
+        ("μ₀ (vacuum permeability)", "1.25663706212×10⁻⁶ N·A⁻²", "magnetic constant"),
+        ("mₑ (electron mass)", "9.1093837015×10⁻³¹ kg", "rest mass of the electron"),
+        ("mₚ (proton mass)", "1.67262192369×10⁻²⁷ kg", "rest mass of the proton"),
+        ("mₙ (neutron mass)", "1.67492749804×10⁻²⁷ kg", "rest mass of the neutron"),
+        ("α (fine-structure constant)", "7.2973525693×10⁻³ (≈ 1/137)", "strength of electromagnetism"),
+        ("R∞ (Rydberg constant)", "10973731.568160 m⁻¹", "hydrogen spectrum scale"),
+        ("F (Faraday constant)", "96485.33212 C/mol", "charge per mole of electrons"),
+        ("a₀ (Bohr radius)", "5.29177210903×10⁻¹¹ m", "size of the hydrogen atom"),
+        ("μB (Bohr magneton)", "9.2740100783×10⁻²⁴ J/T", "electron magnetic-moment scale"),
+        ("b (Wien's displacement)", "2.897771955×10⁻³ m·K", "peak black-body wavelength × T"),
+        ("g (standard gravity)", "9.80665 m/s²", "standard free-fall acceleration"),
+        ("atm (standard atmosphere)", "101325 Pa", "standard sea-level pressure"),
+    ]
+
+
+@bot.message_handler(commands=["constants"], func=is_allowed)
+def cmd_constants(message):
+    lines_of_constants = []
+    lines_of_constants.append("📐 Math constants")
+    for symbol, value, description in MathConstants.CONSTANTS:
+        lines_of_constants.append(f"{symbol} = {value} — {description}")
+    lines_of_constants.append("")
+    lines_of_constants.append("🔬 Physics constants")
+    for symbol, value, description in PhysicsConstants.CONSTANTS:
+        lines_of_constants.append(f"{symbol} = {value} — {description}")
+    send_reply(message, "\n".join(lines_of_constants))
 
 
 if HF_SPACE_ID:
