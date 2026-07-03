@@ -324,15 +324,61 @@ def cmd_constants(message):
     send_reply(message, "\n".join(lines_of_constants))
 
 
-# Names the /plot expression is allowed to reference. Anything else (an
-# unknown function, or an attribute-access exploit like __class__) is
-# rejected before eval() ever runs — this is the security boundary.
-_PLOT_ALLOWED_NAMES = {
-    "x", "pi", "e", "tau",
+# Functions the /plot expression may call. Kept separate from the value
+# names (x, pi, e, tau) because implicit-multiplication insertion needs to
+# know which names are functions: "2x" -> "2*x" but "sin(x)" stays "sin(x)".
+_PLOT_FUNCS = {
     "sin", "cos", "tan", "asin", "acos", "atan",
     "sinh", "cosh", "tanh", "exp", "sqrt", "abs",
     "log", "ln", "log10", "log2", "ceil", "floor", "sign",
 }
+# Every name the expression is allowed to reference. Anything else (an
+# unknown function, or an attribute-access exploit like __class__) is
+# rejected before eval() ever runs — this is the security boundary.
+_PLOT_ALLOWED_NAMES = _PLOT_FUNCS | {"x", "pi", "e", "tau"}
+
+_SUPERSCRIPTS = {"²": "**2", "³": "**3", "⁴": "**4", "⁵": "**5"}
+
+
+def _normalize_expr(expr: str) -> str:
+    """Rewrite student-friendly notation into a valid Python expression.
+
+    So `y = 2x^2 - 3x`, `X²`, `3sin(x)`, `2(x+1)`, and `2π` all become
+    something eval() can handle (`2*x**2 - 3*x`, `x**2`, `3*sin(x)`,
+    `2*(x+1)`, `2*pi`). Purely syntactic — the security allow-list still
+    runs on the result.
+    """
+    import re
+
+    s = expr.strip().lower()
+    s = re.sub(r"^\s*(?:y|f\s*\(\s*x\s*\))\s*=\s*", "", s)  # drop a leading "y =" / "f(x) ="
+    s = (
+        s.replace("π", "pi").replace("×", "*").replace("·", "*")
+        .replace("÷", "/").replace("−", "-").replace("^", "**")
+    )
+    for sup, repl in _SUPERSCRIPTS.items():
+        s = s.replace(sup, repl)
+
+    # Insert an explicit * wherever two "values" sit side by side, e.g.
+    # 2x, 2(x+1), (x+1)(x-1), 3sin(x). A function name before "(" is a
+    # call, not a product, so it must NOT receive a *.
+    tokens = re.findall(r"\d+\.?\d*|\.\d+|[a-z]+\d*|\*\*|\s+|[-+*/(),.]|.", s)
+    out, prev = [], ""
+    for tok in tokens:
+        if tok.isspace():
+            continue
+        starts_value = bool(re.fullmatch(r"\d+\.?\d*|\.\d+|[a-z]+\d*", tok)) or tok == "("
+        prev_is_name = bool(re.fullmatch(r"[a-z]+\d*", prev))
+        ends_value = (
+            prev == ")"
+            or bool(re.fullmatch(r"\d+\.?\d*|\.\d+", prev))
+            or (prev_is_name and prev not in _PLOT_FUNCS)
+        )
+        if prev and ends_value and starts_value:
+            out.append("*")
+        out.append(tok)
+        prev = tok
+    return "".join(out)
 
 
 def _render_plot(expr: str, x_min: float = -10.0, x_max: float = 10.0, points: int = 1000):
@@ -354,10 +400,10 @@ def _render_plot(expr: str, x_min: float = -10.0, x_max: float = 10.0, points: i
     matplotlib.use("Agg")  # headless backend — no display on the server
     import matplotlib.pyplot as plt
 
-    code = expr.replace("^", "**")  # let students write x^2 for x**2
+    code = _normalize_expr(expr)  # 2x -> 2*x, y=x^2 -> x**2, X² -> x**2, etc.
     if "__" in code:
         raise ValueError("that expression isn't allowed.")
-    unknown = sorted({n for n in re.findall(r"[A-Za-z_]+", code) if n not in _PLOT_ALLOWED_NAMES})
+    unknown = sorted({n for n in re.findall(r"[a-z_]+", code) if n not in _PLOT_ALLOWED_NAMES})
     if unknown:
         raise ValueError(
             f"unknown name(s): {', '.join(unknown)}. "
@@ -424,7 +470,14 @@ def cmd_plot(message):
     if not expr:
         bot.send_message(
             message.chat.id,
-            "Usage: /plot <function of x>\nExample: /plot sin(x) + x/2",
+            "Usage: /plot <function of x>\n\n"
+            "Examples:\n"
+            "• /plot x^2 - 3x + 2\n"
+            "• /plot sin(x) + x/2\n"
+            "• /plot 1/x\n"
+            "• /plot sqrt(x)\n\n"
+            "Use x as the variable. Functions: sin, cos, tan, exp, log, ln, "
+            "sqrt, abs. Constants: pi, e. Powers with ^ or **.",
         )
         return
     try:
