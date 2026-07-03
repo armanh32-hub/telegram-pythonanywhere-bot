@@ -174,14 +174,13 @@ def cmd_roast(message):
 
 @bot.message_handler(commands=["problem"], func=is_allowed)
 def cmd_problem(message):
-    try:
-        type_of_problem = message.text.split(maxsplit=2)[1]
-        difficulty = message.text.split(maxsplit=2)[2]
-    except IndexError:
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
         bot.send_message(message.chat.id, "Please specify the type of problem (math/physics) you would like and its difficulty level.")
         return
+    type_of_problem, difficulty = parts[1], parts[2]
 
-    problem = ask_ai(message.chat.id, f"Give me a {type_of_problem} problem with {difficulty} difficulty .")
+    problem = ask_ai(message.chat.id, f"Give me a {type_of_problem} problem with {difficulty} difficulty.")
     bot.send_message(message.chat.id, problem)
 
 @bot.message_handler(commands=["remember"], func=is_allowed)
