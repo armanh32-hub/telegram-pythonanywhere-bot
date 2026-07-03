@@ -3,7 +3,7 @@ import os
 import random
 from datetime import datetime
 from bot.clients import bot, BOT_INFO, store
-from bot.config import HF_SPACE_ID, RATE_LIMIT, SYSTEM_PROMPT
+from bot.config import COMMIT_SHA, HF_SPACE_ID, RATE_LIMIT, SYSTEM_PROMPT
 from bot.ai import ask_ai
 from bot.providers import generate
 from bot.helpers import is_allowed, keep_typing, send_reply, should_respond
@@ -72,7 +72,8 @@ def cmd_help(message):
         "/remember <text> — remembers what you write",
         "/recall — shows you, what he has remembered",
         "/forget — forgets all notes",
-        "/problem <math/physics> — gives you a math or physics problem"
+        "/problem <math/physics> — gives you a math or physics problem",
+        "/sha   — show the live git commit SHA",
     ]
     if HF_SPACE_ID:
         lines.append("/model — switch AI provider")
@@ -174,12 +175,13 @@ def cmd_roast(message):
 @bot.message_handler(commands=["problem"], func=is_allowed)
 def cmd_problem(message):
     try:
-        type_of_problem = message.text.split(maxsplit=1)[1]
+        type_of_problem = message.text.split(maxsplit=2)[1]
+        difficulty = message.text.split(maxsplit=2)[2]
     except IndexError:
-        bot.send_message(message.chat.id, "Please write what kind of problem do you want (math/physics)")
+        bot.send_message(message.chat.id, "Please specify the type of problem (math/physics) you would like and its difficulty level.")
         return
 
-    problem = ask_ai(message.chat.id, f"Give me a {type_of_problem} problem.")
+    problem = ask_ai(message.chat.id, f"Give me a {type_of_problem} problem with {difficulty} difficulty .")
     bot.send_message(message.chat.id, problem)
 
 @bot.message_handler(commands=["remember"], func=is_allowed)
@@ -236,6 +238,12 @@ def cmd_forget(message):
         bot.send_message(message.chat.id, "Couldn't clear your notes. Try again later.")
         return
     bot.send_message(message.chat.id, "Done — I've forgotten all your notes.")
+
+
+@bot.message_handler(commands=["sha"], func=is_allowed)
+def cmd_sha(message):
+    sha = COMMIT_SHA or "unknown"
+    bot.send_message(message.chat.id, f"Live SHA: {sha}")
 
 
 if HF_SPACE_ID:

@@ -118,68 +118,58 @@ def test_handle_message_mention_only_skipped():
 # ── /about ────────────────────────────────────────────────────────────────────
 
 
-def test_cmd_about_with_sqlite():
-    """When SQLite is configured, /about should reference SQLite."""
+def test_cmd_about_uses_generate_with_system_prompt():
+    """This fork's /about asks the AI to introduce itself using the configured
+    persona (via generate(), not ask_ai, so it's not saved to history)."""
     with (
         patch("bot.handlers.bot") as mock_bot,
-        patch("bot.handlers.store", MagicMock()),
-        patch("bot.handlers.HF_SPACE_ID", ""),
+        patch("bot.handlers.generate", return_value="Hi, I'm your assistant!") as mock_gen,
+    ):
+        from bot.handlers import cmd_about
+
+        cmd_about(make_message())
+        mock_gen.assert_called_once()
+        sent = mock_bot.send_message.call_args[0][1]
+        assert sent == "Hi, I'm your assistant!"
+
+
+def test_cmd_about_falls_back_when_provider_unavailable():
+    """If the provider raises, /about must not crash — it sends a static
+    fallback message instead."""
+    with (
+        patch("bot.handlers.bot") as mock_bot,
+        patch("bot.handlers.generate", side_effect=RuntimeError("boom")),
     ):
         from bot.handlers import cmd_about
 
         cmd_about(make_message())
         sent = mock_bot.send_message.call_args[0][1]
-        assert "SQLite" in sent
-        assert "stateless" not in sent
+        assert "math" in sent.lower()
 
 
-def test_cmd_about_includes_commit_sha_when_set():
-    """When COMMIT_SHA is populated (worker booted inside a git repo),
-    /about exposes a Version line so users can validate which commit is
-    live."""
+# ── /sha ─────────────────────────────────────────────────────────────────────
+
+
+def test_cmd_sha_reports_live_commit_sha():
     with (
         patch("bot.handlers.bot") as mock_bot,
-        patch("bot.handlers.store", MagicMock()),
-        patch("bot.handlers.HF_SPACE_ID", ""),
         patch("bot.handlers.COMMIT_SHA", "abc1234"),
     ):
-        from bot.handlers import cmd_about
+        from bot.handlers import cmd_sha
 
-        cmd_about(make_message())
-        sent = mock_bot.send_message.call_args[0][1]
-        assert "Version: abc1234" in sent
+        cmd_sha(make_message())
+        mock_bot.send_message.assert_called_once_with(456, "Live SHA: abc1234")
 
 
-def test_cmd_about_omits_version_line_when_sha_unknown():
-    """If git rev-parse failed at boot, the Version line is dropped
-    entirely rather than showing 'unknown' — clearer for the user."""
+def test_cmd_sha_reports_unknown_when_git_sha_unavailable():
     with (
         patch("bot.handlers.bot") as mock_bot,
-        patch("bot.handlers.store", MagicMock()),
-        patch("bot.handlers.HF_SPACE_ID", ""),
         patch("bot.handlers.COMMIT_SHA", ""),
     ):
-        from bot.handlers import cmd_about
+        from bot.handlers import cmd_sha
 
-        cmd_about(make_message())
-        sent = mock_bot.send_message.call_args[0][1]
-        assert "Version" not in sent
-
-
-def test_cmd_about_without_store():
-    """When no backend is configured, /about must say stateless. Regression
-    guard for the NameError that occurred when `store` was missing from
-    bot.handlers' imports."""
-    with (
-        patch("bot.handlers.bot") as mock_bot,
-        patch("bot.handlers.store", None),
-        patch("bot.handlers.HF_SPACE_ID", ""),
-    ):
-        from bot.handlers import cmd_about
-
-        cmd_about(make_message())
-        sent = mock_bot.send_message.call_args[0][1]
-        assert "stateless" in sent
+        cmd_sha(make_message())
+        mock_bot.send_message.assert_called_once_with(456, "Live SHA: unknown")
 
 
 # ── /model command ────────────────────────────────────────────────────────────
