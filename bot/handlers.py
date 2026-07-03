@@ -486,7 +486,7 @@ def cmd_plot(message):
         bot.send_message(message.chat.id, f"Couldn't plot that: {e}")
         return
     except Exception as e:
-        print(f"Plot error: {e}")
+        bot.send_message(message.from_user.id, f"Plot error: {e}")
         bot.send_message(message.chat.id, "Sorry, I couldn't plot that function.")
         return
     bot.send_photo(message.chat.id, image, caption=f"y = {expr}   (x from -10 to 10)")
