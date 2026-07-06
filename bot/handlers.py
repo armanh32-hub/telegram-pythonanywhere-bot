@@ -250,7 +250,7 @@ def cmd_convert(message):
     input_unit = parts[1]
     output_unit = parts[2]
 
-    reply = ask_ai(message.chat.id, f"Convert {input_unit} to {output_unit}" )
+    reply = ask_ai(message.chat.id, f"Convert {input_unit} to {output_unit}. give me just an answer without LaTeX" )
     bot.send_message(message.chat.id, reply)
 
 class MathConstants:
