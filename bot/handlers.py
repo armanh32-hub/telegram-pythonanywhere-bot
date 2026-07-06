@@ -6,7 +6,7 @@ from datetime import datetime
 from bot.clients import bot, BOT_INFO, store
 from bot.config import COMMIT_SHA, HF_SPACE_ID, RATE_LIMIT, SYSTEM_PROMPT
 from bot.ai import ask_ai
-from bot.providers import generate
+from bot.providers import generate, _call_main
 from bot.helpers import is_allowed, keep_typing, send_reply, should_respond
 from bot.history import clear_history
 from bot.preferences import get_provider, set_provider
@@ -77,6 +77,7 @@ def cmd_help(message):
         "/convert <in unit> <out unit> — converts units of measurement (for example /convert 60km/h m/s)",
         "/constants — shows you math and physics constants",
         "/plot <function of x> — plots a function, e.g. /plot sin(x) + x/2",
+        "/solveGeometry <problem> — draws and solves a geometry problem",
     ]
     if HF_SPACE_ID:
         lines.append("/model — switch AI provider")
@@ -490,6 +491,226 @@ def cmd_plot(message):
         bot.send_message(message.chat.id, "Sorry, I couldn't plot that function.")
         return
     bot.send_photo(message.chat.id, image, caption=f"y = {expr}   (x from -10 to 10)")
+
+# The model must return a figure it can draw AND a written solution. We ask
+# for structured JSON (not runnable code) so the drawing is rendered by our own
+# trusted matplotlib code — the AI never executes anything on the server.
+GEOMETRY_SYSTEM_PROMPT = (
+    "You are a geometry tutor. You will be given a geometry problem. "
+    "Respond with ONLY a single JSON object (no markdown, no code fences, no "
+    "text before or after) of exactly this shape:\n"
+    "{\n"
+    '  "title": "short title of the figure",\n'
+    '  "points": [{"name": "A", "x": 0, "y": 0}],\n'
+    '  "segments": [{"from": "A", "to": "B", "label": "5"}],\n'
+    '  "circles": [{"center": "O", "radius": 3}],\n'
+    '  "polygons": [["A", "B", "C"]],\n'
+    '  "right_angles": [{"at": "B", "from": "A", "to": "C"}],\n'
+    '  "solution": "Full step-by-step solution as plain text."\n'
+    "}\n\n"
+    "Rules:\n"
+    "- Choose a coordinate system so the drawing accurately reflects the given "
+    "measurements and relationships (right angles, equal sides, parallels, etc.).\n"
+    "- Every point named in segments/circles/polygons/right_angles MUST appear "
+    "in \"points\".\n"
+    "- A circle's \"center\" is a point name from \"points\"; \"radius\" is a number.\n"
+    "- Put a \"label\" on a segment only when the problem gives its length or "
+    "measure; otherwise omit the label.\n"
+    "- \"polygons\" draw closed outlines — list each vertex once, do not repeat "
+    "the first point.\n"
+    "- \"right_angles\" draw a small square at vertex \"at\" between the rays to "
+    "\"from\" and \"to\".\n"
+    "- Any of the list fields may be empty ([]) if not needed.\n"
+    "- \"solution\" must explain the reasoning clearly and end with the final "
+    "answer.\n"
+    "- Output valid JSON and nothing else."
+)
+
+
+def _extract_json(text: str) -> dict:
+    """Parse the JSON object out of the model's reply.
+
+    Tolerates markdown code fences and any stray prose around the object by
+    slicing from the first ``{`` to the last ``}`` before json.loads().
+    """
+    import re
+
+    s = (text or "").strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-zA-Z]*\n?", "", s)
+        s = re.sub(r"\n?```$", "", s).strip()
+    start, end = s.find("{"), s.rfind("}")
+    if start != -1 and end > start:
+        s = s[start : end + 1]
+    return json.loads(s)
+
+
+def _draw_right_angle(ax, v, a, b, size):
+    """Draw a small right-angle square at vertex v, opening toward a and b."""
+    import numpy as np
+
+    v, a, b = (np.array(p, dtype=float) for p in (v, a, b))
+    u1, u2 = a - v, b - v
+    n1, n2 = np.linalg.norm(u1), np.linalg.norm(u2)
+    if n1 == 0 or n2 == 0:
+        return
+    u1, u2 = u1 / n1, u2 / n2
+    p1, p2, p3 = v + u1 * size, v + u2 * size, v + (u1 + u2) * size
+    ax.plot(
+        [p1[0], p3[0], p2[0]], [p1[1], p3[1], p2[1]], color="#333333", linewidth=1
+    )
+
+
+def _render_geometry(figure: dict):
+    """Render a geometry figure (points/segments/circles/...) to a PNG in memory.
+
+    matplotlib/numpy are imported lazily (see _render_plot) so worker boot stays
+    light and the test suite can import this module without them installed.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")  # headless backend — no display on the server
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from matplotlib.patches import Circle
+    from matplotlib.patches import Polygon as MplPolygon
+
+    pts = {}
+    for p in figure.get("points") or []:
+        try:
+            pts[str(p["name"])] = (float(p["x"]), float(p["y"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    # Overall span drives the size of decorations (right-angle marks, label
+    # offsets) so they scale with the figure regardless of its coordinates.
+    if pts:
+        xs = [x for x, _ in pts.values()]
+        ys = [y for _, y in pts.values()]
+        span = max(max(xs) - min(xs), max(ys) - min(ys), 1.0)
+    else:
+        span = 1.0
+
+    fig, ax = plt.subplots(figsize=(7, 7), dpi=110)
+    ax.set_aspect("equal")
+
+    for poly in figure.get("polygons") or []:
+        coords = [pts[str(n)] for n in poly if str(n) in pts]
+        if len(coords) >= 3:
+            ax.add_patch(
+                MplPolygon(
+                    coords, closed=True, fill=False, edgecolor="#1f77b4", linewidth=2
+                )
+            )
+
+    for seg in figure.get("segments") or []:
+        a, b = str(seg.get("from")), str(seg.get("to"))
+        if a in pts and b in pts:
+            (x1, y1), (x2, y2) = pts[a], pts[b]
+            ax.plot([x1, x2], [y1, y2], color="#1f77b4", linewidth=2)
+            label = seg.get("label")
+            if label:
+                ax.text(
+                    (x1 + x2) / 2, (y1 + y2) / 2, str(label),
+                    fontsize=10, color="#d62728", ha="center", va="center",
+                    bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.85),
+                )
+
+    for c in figure.get("circles") or []:
+        center = c.get("center")
+        if isinstance(center, dict):
+            try:
+                cx, cy = float(center["x"]), float(center["y"])
+            except (KeyError, TypeError, ValueError):
+                continue
+        elif str(center) in pts:
+            cx, cy = pts[str(center)]
+        else:
+            continue
+        try:
+            r = float(c.get("radius", 0))
+        except (TypeError, ValueError):
+            continue
+        if r > 0:
+            ax.add_patch(Circle((cx, cy), r, fill=False, edgecolor="#1f77b4", linewidth=2))
+
+    for ra in figure.get("right_angles") or []:
+        v, a, b = str(ra.get("at")), str(ra.get("from")), str(ra.get("to"))
+        if v in pts and a in pts and b in pts:
+            _draw_right_angle(ax, pts[v], pts[a], pts[b], size=span * 0.06)
+
+    for name, (x, y) in pts.items():
+        ax.plot(x, y, "o", color="#333333", markersize=5)
+        ax.annotate(
+            name, (x, y), textcoords="offset points", xytext=(6, 6),
+            fontsize=11, fontweight="bold",
+        )
+
+    ax.autoscale_view()
+    ax.margins(0.15)
+    ax.axis("off")
+    title = figure.get("title")
+    if title:
+        ax.set_title(str(title))
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)  # release the figure so repeated calls don't leak memory
+    buf.seek(0)
+    return buf
+
+
+@bot.message_handler(commands=["solveGeometry"], func=is_allowed)
+def cmd_solveGeometry(message):
+    parts = (message.text or "").split(maxsplit=1)
+    problem = parts[1].strip() if len(parts) > 1 else ""
+    if not problem:
+        bot.send_message(
+            message.chat.id,
+            "Usage: /solveGeometry <problem>\n\n"
+            "Example:\n"
+            "/solveGeometry In right triangle ABC the right angle is at B. "
+            "AB = 3 and BC = 4. Find AC.",
+        )
+        return
+
+    _log(message, "in", message.text)
+    # Force the main (OpenAI-compatible) provider regardless of the user's
+    # /model preference — this task needs a strong chat model that emits JSON,
+    # which the HF completion model can't do.
+    messages = [
+        {"role": "system", "content": GEOMETRY_SYSTEM_PROMPT},
+        {"role": "user", "content": problem},
+    ]
+    try:
+        with keep_typing(message.chat.id):
+            raw = _call_main(messages)
+    except Exception as e:
+        bot.send_message(message.from_user.id, f"Geometry AI error: {e}")
+        bot.send_message(
+            message.chat.id, "Sorry, I couldn't solve that problem right now."
+        )
+        return
+
+    try:
+        data = _extract_json(raw)
+    except Exception as e:
+        # Couldn't parse a figure — still deliver whatever the model wrote.
+        bot.send_message(message.from_user.id, f"Geometry JSON parse error: {e}")
+        send_reply(message, raw)
+        return
+
+    # Send the drawing first (best-effort), then the written solution.
+    try:
+        image = _render_geometry(data)
+        caption = str(data.get("title") or "Figure")[:1024]
+        bot.send_photo(message.chat.id, image, caption=caption)
+    except Exception as e:
+        bot.send_message(message.from_user.id, f"Geometry drawing error: {e}")
+
+    solution = str(data.get("solution", "")).strip()
+    send_reply(message, solution or "(No solution text was produced.)")
+
 
 
 if HF_SPACE_ID:
