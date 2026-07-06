@@ -251,6 +251,7 @@ def cmd_convert(message):
     output_unit = parts[2]
 
     reply = ask_ai(message.chat.id, f"Convert {input_unit} to {output_unit}" )
+    bot.send_message(message.chat.id, reply)
 
 class MathConstants:
     """Common mathematical constants (all dimensionless).
