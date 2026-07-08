@@ -77,6 +77,7 @@ def cmd_help(message):
         "/constants — shows you math and physics constants",
         "/plot <function of x> — plots a function, e.g. /plot sin(x) + x/2",
         "/solve <problem> — solves the problem",
+        "/random <start of the range> <end of the range> — returns a random number from the specified range",
         "---------------------\n",
         "--- Fun Commands ---",
         "/joke — tells you a funny joke about math or physics",
@@ -245,6 +246,7 @@ def cmd_problem(message):
     if len(parts) < 3:
         bot.send_message(message.chat.id, "Please specify the type of problem (mathematical or physical) and the difficulty level. The topic is optional.")
         return
+        
     type_of_problem, difficulty = parts[1], parts[2]
     topic = parts[3].strip() if len(parts) > 3 else ""
 
@@ -264,6 +266,25 @@ def cmd_convert(message):
 
     reply = ask_ai(message.chat.id, f"Convert {input_unit} to {output_unit}. give me just an answer without LaTeX" )
     bot.send_message(message.chat.id, reply)
+
+@bot.message_handler(commands=["random"], func=is_allowed)
+def cmd_random(message):
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
+        bot.send_message(message.chat.id, "You must write down both the start and the end of the range.")
+        return
+    try:
+        start = int(parts[1])
+        end = int(parts[2])
+    except ValueError:
+        bot.send_message(message.chat.id, "Both the start and the end of the range must be whole numbers.")
+        return
+    if start > end:
+        start, end = end, start
+
+    num = random.randint(start, end)
+    bot.send_message(message.chat.id, str(num))
+
 
 class MathConstants:
     """Common mathematical constants (all dimensionless).
