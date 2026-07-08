@@ -234,12 +234,13 @@ def cmd_forget(message):
 @bot.message_handler(commands=["problem"], func=is_allowed)
 def cmd_problem(message):
     parts = message.text.split(maxsplit=3)
-    if len(parts) < 4:
-        bot.send_message(message.chat.id, "Please specify the type of problem (mathematical or physical), the difficulty level, and the topic.")
+    if len(parts) < 3:
+        bot.send_message(message.chat.id, "Please specify the type of problem (mathematical or physical) and the difficulty level. The topic is optional.")
         return
-    type_of_problem, difficulty, topic = parts[1], parts[2], parts[3]
-    
-    if topic =="":
+    type_of_problem, difficulty = parts[1], parts[2]
+    topic = parts[3].strip() if len(parts) > 3 else ""
+
+    if topic == "":
         topic = "random topic"
 
     problem = ask_ai(message.chat.id, f"Give me a {type_of_problem} problem with {difficulty} difficulty, about {topic}. Dont give any hints and dont give the solution and answer.")
