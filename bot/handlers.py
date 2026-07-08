@@ -261,6 +261,7 @@ def cmd_convert(message):
     parts = message.text.split(maxsplit=2)
     if len(parts) < 3:
         bot.send_message(message.chat.id, "You must write down both the initial and final units of measurement.")
+        return
     input_unit = parts[1]
     output_unit = parts[2]
 
