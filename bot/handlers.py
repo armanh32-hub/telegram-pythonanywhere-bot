@@ -238,6 +238,9 @@ def cmd_problem(message):
         bot.send_message(message.chat.id, "Please specify the type of problem (mathematical or physical), the difficulty level, and the topic.")
         return
     type_of_problem, difficulty, topic = parts[1], parts[2], parts[3]
+    
+    if topic =="":
+        topic = "random topic"
 
     problem = ask_ai(message.chat.id, f"Give me a {type_of_problem} problem with {difficulty} difficulty, about {topic}. Dont give any hints and dont give the solution and answer.")
     bot.send_message(message.chat.id, problem)
