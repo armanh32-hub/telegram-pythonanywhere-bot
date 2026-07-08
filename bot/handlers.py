@@ -233,7 +233,7 @@ def cmd_forget(message):
 
 @bot.message_handler(commands=["problem"], func=is_allowed)
 def cmd_problem(message):
-    parts = message.text.split(maxsplit=փ)
+    parts = message.text.split(maxsplit=3)
     if len(parts) < 4:
         bot.send_message(message.chat.id, "Please specify the type of problem (mathematical or physical), the difficulty level, and the topic.")
         return
