@@ -511,7 +511,7 @@ SOLVE_SYSTEM_PROMPT = (
     '  "segments": [{"from": "A", "to": "B", "label": "5"}],\n'
     '  "circles": [{"center": "O", "radius": 3}],\n'
     '  "polygons": [["A", "B", "C"]],\n'
-    '  "right_angles": [{"at": "B", "from": "A", "to": "C"}],\n'
+    '  "right_angles": [{"at": "C", "from": "B", "to": "A"}],\n'
     '  "solution": "Full step-by-step solution as plain text."\n'
     "}\n\n"
     "Rules:\n"
