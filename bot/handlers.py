@@ -73,11 +73,11 @@ def cmd_help(message):
         "/remember <text> — remembers what you write",
         "/recall — shows you, what he has remembered",
         "/forget — forgets all notes",
-        "/problem <math/physics> <low/middle/high> — gives you a math or physics problem with difficulty you wrote",
+        "/problem <math/physics> <low/middle/high> <topic/nothing(if you want a random problem)> — gives you a math or physics problem with difficulty you wrote",
         "/convert <in unit> <out unit> — converts units of measurement (for example /convert 60km/h m/s)",
         "/constants — shows you math and physics constants",
         "/plot <function of x> — plots a function, e.g. /plot sin(x) + x/2",
-        "/solveGeometry <problem> — draws and solves a geometry problem",
+        "/solve <problem> — solves the problem",
     ]
     if HF_SPACE_ID:
         lines.append("/model — switch AI provider")
@@ -233,13 +233,13 @@ def cmd_forget(message):
 
 @bot.message_handler(commands=["problem"], func=is_allowed)
 def cmd_problem(message):
-    parts = message.text.split(maxsplit=2)
-    if len(parts) < 3:
-        bot.send_message(message.chat.id, "Please specify the type of problem (math/physics) you would like and its difficulty level.")
+    parts = message.text.split(maxsplit=փ)
+    if len(parts) < 4:
+        bot.send_message(message.chat.id, "Please specify the type of problem (mathematical or physical), the difficulty level, and the topic.")
         return
-    type_of_problem, difficulty = parts[1], parts[2]
+    type_of_problem, difficulty, topic = parts[1], parts[2], parts[3]
 
-    problem = ask_ai(message.chat.id, f"Give me a {type_of_problem} problem with {difficulty} difficulty. Dont give any hints and dont give the solution and answer.")
+    problem = ask_ai(message.chat.id, f"Give me a {type_of_problem} problem with {difficulty} difficulty, about {topic}. Dont give any hints and dont give the solution and answer.")
     bot.send_message(message.chat.id, problem)
 
 @bot.message_handler(commands=["convert"], func=is_allowed)
@@ -496,8 +496,9 @@ def cmd_plot(message):
 # The model must return a figure it can draw AND a written solution. We ask
 # for structured JSON (not runnable code) so the drawing is rendered by our own
 # trusted matplotlib code — the AI never executes anything on the server.
-GEOMETRY_SYSTEM_PROMPT = (
-    "You are a geometry tutor. You will be given a geometry problem. "
+SOLVE_SYSTEM_PROMPT = (
+    "You are a patient tutor who solves problems in any subject — geometry, "
+    "physics, algebra, trigonometry, and more. You will be given a problem. "
     "Respond with ONLY a single JSON object (no markdown, no code fences, no "
     "text before or after) of exactly this shape:\n"
     "{\n"
@@ -510,20 +511,30 @@ GEOMETRY_SYSTEM_PROMPT = (
     '  "solution": "Full step-by-step solution as plain text."\n'
     "}\n\n"
     "Rules:\n"
-    "- Choose a coordinate system so the drawing accurately reflects the given "
-    "measurements and relationships (right angles, equal sides, parallels, etc.).\n"
+    "- A drawing is OPTIONAL. Include one ONLY when a diagram genuinely helps "
+    "understand the problem (e.g. a geometry figure, a physics free-body or "
+    "vector diagram, a triangle for trigonometry). For pure algebra or problems "
+    "that need no picture, leave ALL of \"points\", \"segments\", \"circles\", "
+    "\"polygons\", and \"right_angles\" as empty lists ([]).\n"
+    "- When you DO draw, use the fields as a general 2D diagram in a coordinate "
+    "system you choose: \"points\" are labelled dots, \"segments\" are lines "
+    "between two points (use them for triangle sides, force/velocity vectors, "
+    "rays, axes, etc.), \"circles\" are circles, \"polygons\" are closed shapes, "
+    "\"right_angles\" mark a 90° angle.\n"
+    "- Choose coordinates so the drawing accurately reflects the given "
+    "measurements and relationships (right angles, equal sides, parallels, "
+    "directions, magnitudes, etc.).\n"
     "- Every point named in segments/circles/polygons/right_angles MUST appear "
     "in \"points\".\n"
     "- A circle's \"center\" is a point name from \"points\"; \"radius\" is a number.\n"
-    "- Put a \"label\" on a segment only when the problem gives its length or "
-    "measure; otherwise omit the label.\n"
+    "- Put a \"label\" on a segment only when it carries useful information (a "
+    "length, a measure, a force magnitude, a name); otherwise omit the label.\n"
     "- \"polygons\" draw closed outlines — list each vertex once, do not repeat "
     "the first point.\n"
     "- \"right_angles\" draw a small square at vertex \"at\" between the rays to "
     "\"from\" and \"to\".\n"
-    "- Any of the list fields may be empty ([]) if not needed.\n"
-    "- \"solution\" must explain the reasoning clearly and end with the final "
-    "answer.\n"
+    "- \"solution\" must explain the reasoning clearly, step by step, and end "
+    "with the final answer. Write formulas in plain readable text (no LaTeX).\n"
     "- Output valid JSON and nothing else."
 )
 
@@ -661,17 +672,22 @@ def _render_geometry(figure: dict):
     return buf
 
 
-@bot.message_handler(commands=["solveGeometry"], func=is_allowed)
-def cmd_solveGeometry(message):
+@bot.message_handler(commands=["solve"], func=is_allowed)
+def cmd_solve(message):
     parts = (message.text or "").split(maxsplit=1)
     problem = parts[1].strip() if len(parts) > 1 else ""
     if not problem:
         bot.send_message(
             message.chat.id,
-            "Usage: /solveGeometry <problem>\n\n"
-            "Example:\n"
-            "/solveGeometry In right triangle ABC the right angle is at B. "
-            "AB = 3 and BC = 4. Find AC.",
+            "Usage: /solve <problem>\n\n"
+            "I solve geometry, physics, algebra and more — and draw a diagram "
+            "when it helps.\n\n"
+            "Examples:\n"
+            "/solve In right triangle ABC the right angle is at B. "
+            "AB = 3 and BC = 4. Find AC.\n"
+            "/solve A car accelerates from rest at 2 m/s^2 for 5 s. "
+            "How far does it travel?\n"
+            "/solve Solve 2x^2 - 3x - 5 = 0.",
         )
         return
 
@@ -680,14 +696,14 @@ def cmd_solveGeometry(message):
     # /model preference — this task needs a strong chat model that emits JSON,
     # which the HF completion model can't do.
     messages = [
-        {"role": "system", "content": GEOMETRY_SYSTEM_PROMPT},
+        {"role": "system", "content": SOLVE_SYSTEM_PROMPT},
         {"role": "user", "content": problem},
     ]
     try:
         with keep_typing(message.chat.id):
             raw = _call_main(messages)
     except Exception as e:
-        bot.send_message(message.from_user.id, f"Geometry AI error: {e}")
+        bot.send_message(message.from_user.id, f"Solve AI error: {e}")
         bot.send_message(
             message.chat.id, "Sorry, I couldn't solve that problem right now."
         )
@@ -697,17 +713,24 @@ def cmd_solveGeometry(message):
         data = _extract_json(raw)
     except Exception as e:
         # Couldn't parse a figure — still deliver whatever the model wrote.
-        bot.send_message(message.from_user.id, f"Geometry JSON parse error: {e}")
+        bot.send_message(message.from_user.id, f"Solve JSON parse error: {e}")
         send_reply(message, raw)
         return
 
-    # Send the drawing first (best-effort), then the written solution.
-    try:
-        image = _render_geometry(data)
-        caption = str(data.get("title") or "Figure")[:1024]
-        bot.send_photo(message.chat.id, image, caption=caption)
-    except Exception as e:
-        bot.send_message(message.from_user.id, f"Geometry drawing error: {e}")
+    # Draw only when the model actually provided figure elements — many
+    # problems (pure algebra, etc.) need no diagram, in which case every list
+    # is empty and we skip straight to the written solution.
+    has_figure = any(
+        data.get(k) for k in ("points", "segments", "circles", "polygons")
+    )
+    if has_figure:
+        # Send the drawing first (best-effort), then the written solution.
+        try:
+            image = _render_geometry(data)
+            caption = str(data.get("title") or "Figure")[:1024]
+            bot.send_photo(message.chat.id, image, caption=caption)
+        except Exception as e:
+            bot.send_message(message.from_user.id, f"Solve drawing error: {e}")
 
     solution = str(data.get("solution", "")).strip()
     send_reply(message, solution or "(No solution text was produced.)")
