@@ -60,24 +60,24 @@ def cmd_start(message):
 @bot.message_handler(commands=["help"], func=is_allowed)
 def cmd_help(message):
     lines = [
-        "--- Base Comands ---",
+        "--- Base Commands ---",
         "/start — welcome message",
         "/help  — show this message",
         "/reset — clear conversation history",
         "/about — about this bot",
-        "---------------------\n\n",
+        "---------------------\n",
         "--- Memory Management ---",
         "/remember <text> — remembers what you write",
         "/recall — shows you, what he has remembered",
         "/forget — forgets all notes",
-        "---------------------\n\n",
+        "---------------------\n",
         "--- Math and Physics ---",
         "/problem <math/physics> <low/middle/high> <topic/nothing(if you want a random problem)> — gives you a math or physics problem with difficulty you wrote",
         "/convert <in unit> <out unit> — converts units of measurement (for example /convert 60km/h m/s)",
         "/constants — shows you math and physics constants",
         "/plot <function of x> — plots a function, e.g. /plot sin(x) + x/2",
         "/solve <problem> — solves the problem",
-        "---------------------\n\n",
+        "---------------------\n",
         "--- Fun Commands ---",
         "/joke — tells you a funny joke about math or physics",
         "/quote — tells you a motivational quote about math or physics",
@@ -85,7 +85,7 @@ def cmd_help(message):
         "/compliment — tells you a kind compliment",
         "/roast <name/nothing> — tells you a playful roast about math or physics with name you write",
         "/roll — rolls a dice",
-        "---------------------\n\n",
+        "---------------------\n",
     ]
     if HF_SPACE_ID:
         lines.append("/model — switch AI provider")
