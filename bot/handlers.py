@@ -75,7 +75,7 @@ def cmd_help(message):
         "/problem <math/physics> <low/middle/high> <topic/nothing(if you want a random problem)> — gives you a math or physics problem with difficulty you wrote",
         "/convert <in unit> <out unit> — converts units of measurement (for example /convert 60km/h m/s)",
         "/constants — shows you math and physics constants",
-        "/plot <function of x> — plots a function, e.g. /plot sin(x) + x/2",
+        "/plot <function(s) of x> — plots one or more functions, e.g. /plot sin(x), cos(x)",
         "/solve <problem> — solves the problem",
         "/random <start of the range> <end of the range> — returns a random number from the specified range",
         "---------------------\n",
@@ -417,24 +417,14 @@ def _normalize_expr(expr: str) -> str:
     return "".join(out)
 
 
-def _render_plot(expr: str, x_min: float = -10.0, x_max: float = 10.0, points: int = 1000):
-    """Render y = f(x) over [x_min, x_max] to a PNG in memory.
+def _eval_expr(expr: str, x, np):
+    """Turn one student-written expression into a float y-array over `x`.
 
-    matplotlib/numpy are imported lazily (inside this function, not at
-    module top) so that (a) worker boot stays fast and light and (b)
-    importing this module for the test suite doesn't require them.
-
-    The expression is evaluated with eval() but sandboxed two ways: the
-    builtins are stripped, and every alphabetic token must be a known
-    math name (see _PLOT_ALLOWED_NAMES). Raises ValueError with a
-    user-friendly message on any bad input.
+    Shares the security model of _render_plot: the expression is normalized,
+    checked against _PLOT_ALLOWED_NAMES, then eval()'d with builtins stripped.
+    Raises ValueError with a user-friendly message on any bad input.
     """
     import re
-
-    import numpy as np
-    import matplotlib
-    matplotlib.use("Agg")  # headless backend — no display on the server
-    import matplotlib.pyplot as plt
 
     code = _normalize_expr(expr)  # 2x -> 2*x, y=x^2 -> x**2, X² -> x**2, etc.
     if "__" in code:
@@ -446,7 +436,6 @@ def _render_plot(expr: str, x_min: float = -10.0, x_max: float = 10.0, points: i
             "Use x and functions like sin, cos, exp, sqrt, log."
         )
 
-    x = np.linspace(x_min, x_max, points)
     namespace = {
         "x": x, "pi": np.pi, "e": np.e, "tau": 2 * np.pi,
         "sin": np.sin, "cos": np.cos, "tan": np.tan,
@@ -460,7 +449,7 @@ def _render_plot(expr: str, x_min: float = -10.0, x_max: float = 10.0, points: i
         with np.errstate(all="ignore"):  # divide-by-zero / domain errors -> nan, no warning spam
             y = eval(code, {"__builtins__": {}}, namespace)
     except Exception:
-        raise ValueError("couldn't understand that function. Example: /plot x**2 - 3*x + 2")
+        raise ValueError(f"couldn't understand '{expr}'. Example: x**2 - 3*x + 2")
 
     y = np.asarray(y, dtype=float)
     y = np.full_like(x, float(y)) if y.ndim == 0 else np.broadcast_to(y, x.shape).astype(float)
@@ -472,19 +461,58 @@ def _render_plot(expr: str, x_min: float = -10.0, x_max: float = 10.0, points: i
     if finite_diffs.size:
         jump = max(np.percentile(finite_diffs, 99) * 10, 1e-9)
         y[:-1][diffs > jump] = np.nan
+    return y
 
-    finite = y[np.isfinite(y)]
-    if finite.size == 0:
-        raise ValueError(f"the function has no real values on [{x_min:g}, {x_max:g}].")
+
+# Distinct colors cycled across overlaid curves (matplotlib's default palette).
+_PLOT_COLORS = [
+    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+    "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+]
+
+
+def _render_plot(exprs, x_min: float = -10.0, x_max: float = 10.0, points: int = 1000):
+    """Render one or more y = f(x) curves over [x_min, x_max] to a PNG in memory.
+
+    `exprs` may be a single expression string or a list of them; every curve
+    is drawn on the same axes with a distinct color and a legend.
+
+    matplotlib/numpy are imported lazily (inside this function, not at
+    module top) so that (a) worker boot stays fast and light and (b)
+    importing this module for the test suite doesn't require them.
+    """
+    import numpy as np
+    import matplotlib
+    matplotlib.use("Agg")  # headless backend — no display on the server
+    import matplotlib.pyplot as plt
+
+    if isinstance(exprs, str):
+        exprs = [exprs]
+
+    x = np.linspace(x_min, x_max, points)
 
     fig, ax = plt.subplots(figsize=(8, 5), dpi=110)
-    ax.plot(x, y, color="#1f77b4", linewidth=2)
+    all_finite = []  # every curve's real values, pooled for y-axis clipping
+    for i, expr in enumerate(exprs):
+        y = _eval_expr(expr, x, np)  # raises ValueError with a friendly message
+        color = _PLOT_COLORS[i % len(_PLOT_COLORS)]
+        ax.plot(x, y, color=color, linewidth=2, label=f"y = {expr}")
+        all_finite.append(y[np.isfinite(y)])
+
+    finite = np.concatenate(all_finite) if all_finite else np.array([])
+    if finite.size == 0:
+        raise ValueError(f"the function(s) have no real values on [{x_min:g}, {x_max:g}].")
+
     ax.axhline(0, color="gray", linewidth=0.8)
     ax.axvline(0, color="gray", linewidth=0.8)
     ax.grid(True, alpha=0.3)
     ax.set_xlabel("x")
     ax.set_ylabel("y")
-    ax.set_title(f"y = {expr}")
+    if len(exprs) == 1:
+        ax.set_title(f"y = {exprs[0]}")
+    else:
+        ax.set_title("y = f(x)")
+        ax.legend(loc="best", fontsize=9)
 
     # Clip the y-axis to the bulk of the data so a single spike doesn't
     # flatten the interesting part of the curve.
@@ -502,8 +530,10 @@ def _render_plot(expr: str, x_min: float = -10.0, x_max: float = 10.0, points: i
 
 @bot.message_handler(commands=["plot"], func=is_allowed)
 def cmd_plot(message):
-    expr = message.text.split(maxsplit=1)[1].strip() if " " in message.text else ""
-    if not expr:
+    import re
+
+    raw = message.text.split(maxsplit=1)[1].strip() if " " in message.text else ""
+    if not raw:
         bot.send_message(
             message.chat.id,
             "Usage: /plot <function of x>\n\n"
@@ -512,12 +542,21 @@ def cmd_plot(message):
             "• /plot sin(x) + x/2\n"
             "• /plot 1/x\n"
             "• /plot sqrt(x)\n\n"
+            "Plot several at once by separating them with commas or ';':\n"
+            "• /plot sin(x), cos(x), x/3\n\n"
             "Use x as the variable. Functions: sin, cos, tan, exp, log, ln, "
             "sqrt, abs. Constants: pi, e. Powers with ^ or **.",
         )
         return
+    # Split on commas or semicolons so several functions overlay in one plot.
+    # None of the allowed functions take multiple args, so a comma is always
+    # a separator here, never an argument delimiter.
+    exprs = [e.strip() for e in re.split(r"[;,]", raw) if e.strip()]
+    if not exprs:
+        bot.send_message(message.chat.id, "Couldn't plot that: no function given.")
+        return
     try:
-        image = _render_plot(expr)
+        image = _render_plot(exprs)
     except ValueError as e:
         bot.send_message(message.chat.id, f"Couldn't plot that: {e}")
         return
@@ -525,7 +564,8 @@ def cmd_plot(message):
         bot.send_message(message.from_user.id, f"Plot error: {e}")
         bot.send_message(message.chat.id, "Sorry, I couldn't plot that function.")
         return
-    bot.send_photo(message.chat.id, image, caption=f"y = {expr}   (x from -10 to 10)")
+    caption = "y = " + ", ".join(exprs) + "   (x from -10 to 10)"
+    bot.send_photo(message.chat.id, image, caption=caption[:1024])
 
 # The model must return a figure it can draw AND a written solution. We ask
 # for structured JSON (not runnable code) so the drawing is rendered by our own
